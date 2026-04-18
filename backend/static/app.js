@@ -16,25 +16,27 @@ document.addEventListener('DOMContentLoaded', () => {
         loadChart(e.target.value);
     });
 
-    // Start Engine button
+    // Start Engine button (Manually trigger a bot cycle)
     document.getElementById('btn-start-engine').addEventListener('click', async () => {
         const btn = document.getElementById('btn-start-engine');
-        btn.textContent = 'Starting...';
+        btn.textContent = 'Scanning Market...';
         btn.disabled = true;
 
         try {
-            const res = await fetch('/api/bot/start', { method: 'POST' });
+            const res = await fetch('/api/cron');
             const data = await res.json();
-            if (data.status) {
-                btn.textContent = '✓ Engine Running';
+            if (data.status === "success") {
+                btn.textContent = '✓ Scan Complete';
                 btn.classList.add('btn-success');
+                fetchTrades(); // Refresh table
+                setTimeout(() => { btn.textContent = 'Manual Scan'; btn.classList.remove('btn-success'); btn.disabled = false; }, 4000);
             } else {
                 btn.textContent = 'Error';
-                setTimeout(() => { btn.textContent = 'Start Engine'; btn.disabled = false; }, 3000);
+                setTimeout(() => { btn.textContent = 'Manual Scan'; btn.disabled = false; }, 3000);
             }
         } catch (err) {
-            console.error('Failed to start bot', err);
-            btn.textContent = 'Start Engine';
+            console.error('Failed to run bot cycle', err);
+            btn.textContent = 'Manual Scan';
             btn.disabled = false;
         }
     });

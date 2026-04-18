@@ -39,7 +39,7 @@ except Exception as e:
 # Symbols to check (US Stocks as requested)
 SYMBOLS = ["AAPL", "MSFT", "TSLA", "NVDA", "SPY"]
 
-def get_historical_data(symbol, days=30):
+def get_historical_data(symbols, days=30):
     if not data_client: return None
     from datetime import datetime, timedelta
     
@@ -47,7 +47,7 @@ def get_historical_data(symbol, days=30):
     start_date = end_date - timedelta(days=days)
     
     request_params = StockBarsRequest(
-        symbol_or_symbols=symbol,
+        symbol_or_symbols=symbols,
         timeframe=TimeFrame.Day,
         start=start_date,
         end=end_date,
@@ -59,7 +59,7 @@ def get_historical_data(symbol, days=30):
         df = bars.df
         return df
     except Exception as e:
-        print(f"Error fetching data for {symbol}: {e}")
+        print(f"Error fetching data for symbols: {e}")
         return None
 
 def indicator_ensemble(df):
@@ -108,12 +108,9 @@ def indicator_ensemble(df):
 def execute_trade(symbol, signal, close_price):
     if not trading_client: return
     
-    # 1:3 Risk/Reward Math:
-    # Example: Risking 1% of the asset price, target 3% of asset price
     risk_pct = 0.01
     reward_pct = 0.03
-    
-    qty = 1 # We buy 1 share for paper test brevity
+    qty = 1 
     
     try:
         if signal == "BUY":
@@ -132,7 +129,6 @@ def execute_trade(symbol, signal, close_price):
             trading_client.submit_order(order_data=bracket_order)
             print(f"Executing BUY for {symbol} at {close_price} - Stop Loss: {stop_price}, Take Profit: {limit_price}")
             
-            # Send Notification
             send_discord_notification(
                 "🟢 New Trade Opened",
                 f"**Symbol**: {symbol}\n**Type**: BUY\n**Entry Target**: ${close_price}\n**Take Profit**: ${limit_price}\n**Stop Loss**: ${stop_price}",
@@ -167,11 +163,9 @@ def check_for_fills(last_check_time):
         
         if activities:
             for act in activities:
-                # Only alert for activities that happened after our last check
                 if last_check_time and act.transaction_time > last_check_time:
-                    # If it's a sell, it means our bracket closed (TP or SL)
                     if act.side.value.upper() == "SELL":
-                        color = 0x3fb950 if float(act.price) > float(act.price) else 0xf85149 # we will just use standard blue
+                        color = 0x3fb950 if float(act.price) > float(act.price) else 0xf85149
                         send_discord_notification(
                             "📉 Position Closed (Filled)",
                             f"**Symbol**: {act.symbol}\n**Type**: SELL / Close\n**Fill Price**: ${act.price}\n**Qty**: {act.qty}",
@@ -185,7 +179,6 @@ def check_for_fills(last_check_time):
                         )
         return now
     except Exception as e:
-        # Avoid crashing loop if activities fail
         return last_check_time
 
 def update_ui_status():
@@ -208,21 +201,24 @@ def run_bot_cycle():
     print("AuraBot checking market conditions...")
     update_ui_status()
     
-    # We check fills from the last 5 minutes when running serverless
     from datetime import timedelta
     last_fill_check = datetime.now(timezone.utc) - timedelta(minutes=5)
     check_for_fills(last_fill_check)
     
-    for symbol in SYMBOLS:
-        df = get_historical_data(symbol)
-        if df is not None and len(df) > 30:
-            signal = indicator_ensemble(df)
-            current_price = df['close'].iloc[-1]
-            
-            print(f"{symbol} - Price: {current_price:.2f} - Signal: {signal}")
-            
-            if signal != "HOLD":
-                execute_trade(symbol, signal, current_price)
+    # Bulk fetch all symbols at once to prevent Vercel 10s Serverless Timeout
+    all_bars = get_historical_data(SYMBOLS)
+    if all_bars is not None:
+        for symbol in SYMBOLS:
+            if symbol in all_bars.index.get_level_values(0):
+                df = all_bars.loc[symbol]
+                if df is not None and len(df) > 30:
+                    signal = indicator_ensemble(df)
+                    current_price = df['close'].iloc[-1]
+                    
+                    print(f"{symbol} - Price: {current_price:.2f} - Signal: {signal}")
+                    
+                    if signal != "HOLD":
+                        execute_trade(symbol, signal, current_price)
 
     return {"status": "success", "message": "Cycle complete"}
 
