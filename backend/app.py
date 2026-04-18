@@ -107,37 +107,31 @@ def dashboard():
 
 @app.route('/api/status')
 def get_status():
-    # Try bot_state.json written by bot.py first
-    if os.path.exists('bot_state.json'):
-        try:
-            with open('bot_state.json') as f:
-                return jsonify(json.load(f))
-        except Exception:
-            pass
-
     # Try live Alpaca account info
     trading_client, _ = alpaca_clients()
-    if trading_client:
-        try:
-            acct = trading_client.get_account()
-            equity = float(acct.equity)
-            last_equity = float(acct.last_equity) if acct.last_equity else equity
-            return jsonify({
-                "bot_status": "Connected (Paper)",
-                "paper_balance": round(equity, 2),
-                "daily_profit": round(equity - last_equity, 2),
-                "win_rate": "Live",
-            })
-        except Exception as e:
-            print(f"Account fetch error: {e}")
+    if not trading_client:
+        return jsonify({
+            "bot_status": "⚠️ Add API keys to .env",
+            "paper_balance": 0.0,
+            "daily_profit": 0.0,
+            "win_rate": "-"
+        })
 
-    # Fallback mock
-    return jsonify({
-        "bot_status": "⚠️ Add API keys to .env",
-        "paper_balance": "–",
-        "daily_profit": "–",
-        "win_rate": "–",
-    })
+    try:
+        account = trading_client.get_account()
+        return jsonify({
+            "bot_status": "Running",
+            "paper_balance": float(account.portfolio_value),
+            "daily_profit": float(account.equity) - float(account.last_equity) if account.last_equity else 0.0,
+            "win_rate": "Active 🟢"
+        })
+    except Exception as e:
+        return jsonify({
+            "bot_status": f"⚠️ API Error",
+            "paper_balance": 0.0,
+            "daily_profit": 0.0,
+            "win_rate": "-"
+        })
 
 
 @app.route('/api/trades')
