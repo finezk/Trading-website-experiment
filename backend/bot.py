@@ -196,13 +196,16 @@ def execute_trade(symbol, signal, close_price):
         print(f"Error executing trade for {symbol}: {e}")
 
 def send_discord_notification(title, message, color=0x58a6ff):
-    if not DISCORD_WEBHOOK_URL:
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "")
+    if not webhook_url:
+        print("Discord webhook skipped: DISCORD_WEBHOOK_URL not set")
         return
     data = {"embeds": [{"title": title, "description": message, "color": color}]}
     try:
-        requests.post(DISCORD_WEBHOOK_URL, json=data)
-    except:
-        pass
+        resp = requests.post(webhook_url, json=data, timeout=5)
+        print(f"Discord notification sent: {resp.status_code}")
+    except Exception as e:
+        print(f"Discord notification failed: {e}")
 
 def check_for_fills(last_check_time):
     if not trading_client: return last_check_time
