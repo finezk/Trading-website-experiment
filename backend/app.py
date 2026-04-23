@@ -13,7 +13,12 @@ load_dotenv(BASE_DIR / ".env")
 API_KEY = os.getenv("APCA_API_KEY_ID", "")
 SECRET_KEY = os.getenv("APCA_API_SECRET_KEY", "")
 
-SYMBOLS = ["AAPL", "MSFT", "TSLA", "NVDA", "SPY"]
+STOCK_SYMBOLS = ["AAPL", "MSFT", "TSLA", "NVDA", "SPY"]
+CRYPTO_SYMBOLS = ["BTC/USD", "ETH/USD"]
+SYMBOLS = STOCK_SYMBOLS + CRYPTO_SYMBOLS
+
+def is_crypto(symbol):
+    return '/' in symbol
 
 app = Flask(__name__)
 
@@ -27,53 +32,71 @@ def handle_exception(e):
 # ── helpers ───────────────────────────────────────────────────
 
 def alpaca_clients():
-    """Return (trading_client, data_client) or (None, None) when keys missing."""
+    """Return (trading_client, stock_data_client, crypto_data_client) or Nones when keys missing."""
     if not API_KEY or not SECRET_KEY:
-        return None, None
+        return None, None, None
     try:
         from alpaca.trading.client import TradingClient
-        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
         trading = TradingClient(API_KEY, SECRET_KEY, paper=True)
         data = StockHistoricalDataClient(API_KEY, SECRET_KEY)
-        return trading, data
+        crypto = CryptoHistoricalDataClient()  # No keys needed
+        return trading, data, crypto
     except Exception as e:
         print(f"Alpaca client error: {e}")
-        return None, None
+        return None, None, None
 
 
 def get_real_prices():
     """Fetch the latest daily close price for each symbol via Alpaca."""
-    _, data_client = alpaca_clients()
-    if not data_client:
-        return {}
+    _, data_client, crypto_client = alpaca_clients()
+    prices = {}
 
-    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.requests import StockBarsRequest, CryptoBarsRequest
     from alpaca.data.timeframe import TimeFrame
+    from alpaca.data.enums import DataFeed
 
     end = datetime.utcnow()
-    start = end - timedelta(days=5)   # look back a few days to guarantee data
+    start = end - timedelta(days=5)
 
-    try:
-        from alpaca.data.enums import DataFeed
-        req = StockBarsRequest(
-            symbol_or_symbols=SYMBOLS,
-            timeframe=TimeFrame.Day,
-            start=start,
-            end=end,
-            feed=DataFeed.IEX,
-        )
-        bars = data_client.get_stock_bars(req).df
-        # bars is a multi-index df: (symbol, timestamp) → pick last bar per symbol
-        prices = {}
-        for sym in SYMBOLS:
-            try:
-                prices[sym] = float(bars.loc[sym]['close'].iloc[-1])
-            except Exception:
-                pass
-        return prices
-    except Exception as e:
-        print(f"Price fetch error: {e}")
-        return {}
+    # Fetch stock prices
+    if data_client:
+        try:
+            req = StockBarsRequest(
+                symbol_or_symbols=STOCK_SYMBOLS,
+                timeframe=TimeFrame.Day,
+                start=start,
+                end=end,
+                feed=DataFeed.IEX,
+            )
+            bars = data_client.get_stock_bars(req).df
+            for sym in STOCK_SYMBOLS:
+                try:
+                    prices[sym] = float(bars.loc[sym]['close'].iloc[-1])
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"Stock price fetch error: {e}")
+
+    # Fetch crypto prices
+    if crypto_client:
+        try:
+            req = CryptoBarsRequest(
+                symbol_or_symbols=CRYPTO_SYMBOLS,
+                timeframe=TimeFrame.Day,
+                start=start,
+                end=end,
+            )
+            bars = crypto_client.get_crypto_bars(req).df
+            for sym in CRYPTO_SYMBOLS:
+                try:
+                    prices[sym] = float(bars.loc[sym]['close'].iloc[-1])
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"Crypto price fetch error: {e}")
+
+    return prices
 
 
 def get_real_positions(trading_client):
@@ -108,7 +131,7 @@ def dashboard():
 @app.route('/api/status')
 def get_status():
     # Try live Alpaca account info
-    trading_client, _ = alpaca_clients()
+    trading_client, _, _ = alpaca_clients()
     if not trading_client:
         return jsonify({
             "bot_status": "⚠️ Add API keys to .env",
@@ -137,7 +160,7 @@ def get_status():
 @app.route('/api/trades')
 def get_trades():
     # Try live open positions from Alpaca
-    trading_client, _ = alpaca_clients()
+    trading_client, _, _ = alpaca_clients()
     if trading_client:
         positions = get_real_positions(trading_client)
         if positions:
@@ -184,27 +207,40 @@ def get_prices():
 @app.route('/api/chart/<symbol>')
 def get_chart_data(symbol):
     """Return 60 days of daily OHLC prices for candlestick chart."""
-    _, data_client = alpaca_clients()
-    if not data_client:
-        return jsonify({"error": "No API keys"}), 400
+    _, data_client, crypto_client = alpaca_clients()
 
-    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.requests import StockBarsRequest, CryptoBarsRequest
     from alpaca.data.timeframe import TimeFrame
     from alpaca.data.enums import DataFeed
 
     end = datetime.utcnow()
     start = end - timedelta(days=90)
+    sym = symbol.upper()
 
     try:
-        req = StockBarsRequest(
-            symbol_or_symbols=symbol.upper(),
-            timeframe=TimeFrame.Day,
-            start=start,
-            end=end,
-            feed=DataFeed.IEX,
-        )
-        bars = data_client.get_stock_bars(req).df
-        sym_bars = bars.loc[symbol.upper()]
+        if is_crypto(sym):
+            if not crypto_client:
+                return jsonify({"error": "No crypto client"}), 400
+            req = CryptoBarsRequest(
+                symbol_or_symbols=sym,
+                timeframe=TimeFrame.Day,
+                start=start,
+                end=end,
+            )
+            bars = crypto_client.get_crypto_bars(req).df
+        else:
+            if not data_client:
+                return jsonify({"error": "No API keys"}), 400
+            req = StockBarsRequest(
+                symbol_or_symbols=sym,
+                timeframe=TimeFrame.Day,
+                start=start,
+                end=end,
+                feed=DataFeed.IEX,
+            )
+            bars = data_client.get_stock_bars(req).df
+
+        sym_bars = bars.loc[sym]
         candles = []
         for ts, row in sym_bars.iterrows():
             candles.append({
@@ -214,7 +250,7 @@ def get_chart_data(symbol):
                 "l": round(float(row['low']), 2),
                 "c": round(float(row['close']), 2),
             })
-        return jsonify({"candles": candles, "symbol": symbol.upper()})
+        return jsonify({"candles": candles, "symbol": sym})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

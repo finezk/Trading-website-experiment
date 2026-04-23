@@ -42,11 +42,17 @@
                 </div>
                 <div class="header-actions">
                     <select id="chart-symbol" class="symbol-select">
-                        <option value="AAPL">AAPL</option>
-                        <option value="MSFT">MSFT</option>
-                        <option value="TSLA">TSLA</option>
-                        <option value="NVDA">NVDA</option>
-                        <option value="SPY" selected>SPY</option>
+                        <optgroup label="Stocks">
+                            <option value="AAPL">AAPL</option>
+                            <option value="MSFT">MSFT</option>
+                            <option value="TSLA">TSLA</option>
+                            <option value="NVDA">NVDA</option>
+                            <option value="SPY" selected>SPY</option>
+                        </optgroup>
+                        <optgroup label="Crypto">
+                            <option value="BTC/USD">BTC/USD</option>
+                            <option value="ETH/USD">ETH/USD</option>
+                        </optgroup>
                     </select>
                     <button class="btn-primary" id="btn-start-engine">Manual Scan</button>
                 </div>
