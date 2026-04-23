@@ -40,7 +40,7 @@ except Exception as e:
 
 # Symbols to check
 STOCK_SYMBOLS = ["AAPL", "MSFT", "TSLA", "NVDA", "SPY"]
-CRYPTO_SYMBOLS = ["BTC/USD", "ETH/USD"]
+CRYPTO_SYMBOLS = ["BTC/USD", "ETH/USD", "SOL/USD"]
 SYMBOLS = STOCK_SYMBOLS  # Keep for backward compatibility
 
 # Crypto position tracking for manual stop-loss / take-profit
