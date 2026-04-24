@@ -24,6 +24,7 @@ load_dotenv(BASE_DIR / '.env')
 API_KEY = os.getenv("APCA_API_KEY_ID", "YOUR_API_KEY")
 SECRET_KEY = os.getenv("APCA_API_SECRET_KEY", "YOUR_SECRET_KEY")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 
 # Set to False if going live
 PAPER = True
@@ -144,7 +145,44 @@ def indicator_ensemble(df):
     else:
         return "HOLD"
 
-def execute_trade(symbol, signal, close_price):
+# --- Sentiment Analysis Functions ---
+
+def get_crypto_sentiment():
+    """Fetches the Crypto Fear & Greed Index. Returns score 0-100."""
+    try:
+        resp = requests.get('https://api.alternative.me/fng/?limit=1', timeout=5)
+        data = resp.json()
+        fng = data['data'][0]
+        return int(fng["value"])
+    except Exception as e:
+        print(f"Error fetching Crypto Fear & Greed Index: {e}")
+        return 50 # Default to Neutral if API fails
+
+def get_news_sentiment(symbol):
+    """Fetches news sentiment from Finnhub. Returns normalized score 0-100."""
+    if not FINNHUB_API_KEY:
+        return 50
+    try:
+        url = f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}"
+        resp = requests.get(url, timeout=5)
+        data = resp.json()
+        if 'sentiment' in data and 'bullishPercent' in data['sentiment']:
+            # bullishPercent is 0.0 to 1.0, convert to 0-100 score
+            return int(float(data['sentiment']['bullishPercent']) * 100)
+        return 50
+    except Exception as e:
+        print(f"Error fetching Finnhub sentiment for {symbol}: {e}")
+        return 50
+
+def get_sentiment_score(symbol):
+    """Router for sentiment fetching based on asset class."""
+    if is_crypto(symbol):
+        return get_crypto_sentiment()
+    else:
+        return get_news_sentiment(symbol)
+
+
+def execute_trade(symbol, signal, close_price, sentiment_score=50):
     """Execute a trade. Stocks use bracket orders; crypto uses simple market orders."""
     if not trading_client: return
     
@@ -169,7 +207,7 @@ def execute_trade(symbol, signal, close_price):
                 
                 send_discord_notification(
                     "🟢 Crypto Trade Opened",
-                    f"**Symbol**: {symbol}\n**Type**: BUY\n**Amount**: ${CRYPTO_NOTIONAL}\n**Entry Price**: ${close_price:.2f}\n**Target TP**: ${limit_price:.2f} (+3%)\n**Target SL**: ${stop_price:.2f} (-1%)",
+                    f"**Symbol**: {symbol}\n**Type**: BUY\n**Amount**: ${CRYPTO_NOTIONAL}\n**Entry Price**: ${close_price:.2f}\n**Target TP**: ${limit_price:.2f} (+3%)\n**Target SL**: ${stop_price:.2f} (-1%)\n**Sentiment Score**: {sentiment_score}/100",
                     color=0xf7931a
                 )
             else:
@@ -188,7 +226,7 @@ def execute_trade(symbol, signal, close_price):
                 
                 send_discord_notification(
                     "🟢 New Trade Opened",
-                    f"**Symbol**: {symbol}\n**Type**: BUY\n**Entry Target**: ${close_price}\n**Take Profit**: ${limit_price}\n**Stop Loss**: ${stop_price}",
+                    f"**Symbol**: {symbol}\n**Type**: BUY\n**Entry Target**: ${close_price}\n**Take Profit**: ${limit_price}\n**Stop Loss**: ${stop_price}\n**Sentiment Score**: {sentiment_score}/100",
                     color=0x3fb950
                 )
             
@@ -316,7 +354,12 @@ def run_bot_cycle():
                     current_price = df['close'].iloc[-1]
                     print(f"{symbol} - Price: {current_price:.2f} - Signal: {signal}")
                     if signal != "HOLD":
-                        execute_trade(symbol, signal, current_price)
+                        sentiment = get_sentiment_score(symbol)
+                        print(f"{symbol} Sentiment: {sentiment}/100")
+                        if sentiment <= 25:
+                            print(f"TRADE BLOCKED: {symbol} market is in Extreme Fear (Score: {sentiment}).")
+                        else:
+                            execute_trade(symbol, signal, current_price, sentiment)
     
     # ── CRYPTO: Bulk fetch all crypto symbols ──
     crypto_bars = get_crypto_historical_data(CRYPTO_SYMBOLS)
@@ -329,7 +372,12 @@ def run_bot_cycle():
                     current_price = df['close'].iloc[-1]
                     print(f"{symbol} - Price: {current_price:.2f} - Signal: {signal}")
                     if signal != "HOLD":
-                        execute_trade(symbol, signal, current_price)
+                        sentiment = get_sentiment_score(symbol)
+                        print(f"{symbol} Sentiment: {sentiment}/100")
+                        if sentiment <= 25:
+                            print(f"TRADE BLOCKED: {symbol} market is in Extreme Fear (Score: {sentiment}).")
+                        else:
+                            execute_trade(symbol, signal, current_price, sentiment)
 
     return {"status": "success", "message": "Cycle complete"}
 
