@@ -159,17 +159,40 @@ def get_crypto_sentiment():
         return 50 # Default to Neutral if API fails
 
 def get_news_sentiment(symbol):
-    """Fetches news sentiment from Finnhub. Returns normalized score 0-100."""
+    """Fetches news from Finnhub and calculates a basic sentiment score 0-100."""
     if not FINNHUB_API_KEY:
         return 50
     try:
-        url = f"https://finnhub.io/api/v1/news-sentiment?symbol={symbol}&token={FINNHUB_API_KEY}"
+        from datetime import datetime, timedelta
+        end = datetime.now().strftime('%Y-%m-%d')
+        start = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
+        url = f"https://finnhub.io/api/v1/company-news?symbol={symbol}&from={start}&to={end}&token={FINNHUB_API_KEY}"
         resp = requests.get(url, timeout=5)
-        data = resp.json()
-        if 'sentiment' in data and 'bullishPercent' in data['sentiment']:
-            # bullishPercent is 0.0 to 1.0, convert to 0-100 score
-            return int(float(data['sentiment']['bullishPercent']) * 100)
-        return 50
+        articles = resp.json()
+        
+        if not articles or not isinstance(articles, list):
+            return 50
+            
+        positive_words = ['surge', 'up', 'growth', 'record', 'strong', 'higher', 'profit', 'beats', 'buy', 'bull', 'gain', 'jump', 'upgrade']
+        negative_words = ['down', 'fall', 'drop', 'misses', 'loss', 'lower', 'sell', 'bear', 'lawsuit', 'investigation', 'crash', 'downgrade', 'weak']
+        
+        pos_count = 0
+        neg_count = 0
+        
+        for article in articles[:20]:  # Look at top 20 recent articles
+            text = (article.get('headline', '') + ' ' + article.get('summary', '')).lower()
+            for word in positive_words:
+                if word in text:
+                    pos_count += 1
+            for word in negative_words:
+                if word in text:
+                    neg_count += 1
+                    
+        total = pos_count + neg_count
+        if total == 0:
+            return 50
+            
+        return int((pos_count / total) * 100)
     except Exception as e:
         print(f"Error fetching Finnhub sentiment for {symbol}: {e}")
         return 50
