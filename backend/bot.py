@@ -40,8 +40,8 @@ except Exception as e:
     print(f"Failed to initialize Alpaca clients: {e}. Please check your .env file.")
 
 # Symbols to check
-STOCK_SYMBOLS = ["AAPL", "MSFT", "TSLA", "NVDA", "SPY"]
-CRYPTO_SYMBOLS = ["BTC/USD", "ETH/USD", "SOL/USD"]
+STOCK_SYMBOLS = ["AAPL", "MSFT", "TSLA", "NVDA", "SPY", "COIN", "PLTR", "AMD", "META"]
+CRYPTO_SYMBOLS = ["BTC/USD", "ETH/USD", "SOL/USD", "DOGE/USD", "ADA/USD"]
 SYMBOLS = STOCK_SYMBOLS  # Keep for backward compatibility
 
 # Crypto position tracking for manual stop-loss / take-profit
@@ -205,7 +205,65 @@ def get_sentiment_score(symbol):
         return get_news_sentiment(symbol)
 
 
-def execute_trade(symbol, signal, close_price, sentiment_score=50):
+def get_symbol_win_rate(symbol):
+    """
+    Stateless Learning Engine:
+    Queries the last 100 closed orders from Alpaca.
+    Calculates Win Rate for a specific symbol by comparing Take-Profit vs Stop-Loss hits.
+    Returns (win_rate_percentage, total_trades_analyzed).
+    """
+    if not trading_client:
+        return 50.0, 0
+    try:
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        
+        req = GetOrdersRequest(status=QueryOrderStatus.CLOSED, limit=100)
+        orders = trading_client.get_orders(req)
+        
+        wins = 0
+        losses = 0
+        
+        for o in orders:
+            if o.symbol == symbol and str(o.side) == 'OrderSide.SELL':
+                if not is_crypto(symbol):
+                    if str(o.order_type) == 'OrderType.LIMIT' and str(o.status) == 'OrderStatus.FILLED':
+                        wins += 1
+                    elif str(o.order_type) == 'OrderType.STOP' and str(o.status) == 'OrderStatus.FILLED':
+                        losses += 1
+                else:
+                    # For crypto, it's a market order. We could compare execution price to average entry, 
+                    # but for speed, we skip crypto stateless learning for now.
+                    pass
+                    
+        total = wins + losses
+        if total == 0:
+            return 50.0, 0
+            
+        return (wins / total) * 100, total
+    except Exception as e:
+        print(f"Error fetching win rate for {symbol}: {e}")
+        return 50.0, 0
+
+def get_adaptive_threshold(symbol):
+    """
+    Returns required sentiment threshold for a trade.
+    Normally 25. If win rate is poor, threshold increases to demand stronger news.
+    """
+    win_rate, trades_count = get_symbol_win_rate(symbol)
+    
+    if trades_count < 3:
+        return 25, "Neutral (Not enough data)"
+        
+    if win_rate < 40.0:
+        return 55, f"High (Win rate is poor at {win_rate:.0f}%)"
+    elif win_rate > 60.0:
+        return 15, f"Low (Win rate is excellent at {win_rate:.0f}%)"
+    else:
+        return 25, f"Normal (Win rate is average at {win_rate:.0f}%)"
+
+
+def execute_trade(symbol, signal, close_price, sentiment_score=50, threshold_used=25, reason=""):
     """Execute a trade. Stocks use bracket orders; crypto uses simple market orders."""
     if not trading_client: return
     
@@ -230,7 +288,7 @@ def execute_trade(symbol, signal, close_price, sentiment_score=50):
                 
                 send_discord_notification(
                     "🟢 Crypto Trade Opened",
-                    f"**Symbol**: {symbol}\n**Type**: BUY\n**Amount**: ${CRYPTO_NOTIONAL}\n**Entry Price**: ${close_price:.2f}\n**Target TP**: ${limit_price:.2f} (+3%)\n**Target SL**: ${stop_price:.2f} (-1%)\n**Sentiment Score**: {sentiment_score}/100",
+                    f"**Symbol**: {symbol}\n**Type**: BUY\n**Amount**: ${CRYPTO_NOTIONAL}\n**Entry Price**: ${close_price:.2f}\n**Target TP**: ${limit_price:.2f} (+3%)\n**Target SL**: ${stop_price:.2f} (-1%)\n**Sentiment Score**: {sentiment_score}/100\n**Learning Constraint**: Required >{threshold_used} ({reason})",
                     color=0xf7931a
                 )
             else:
@@ -249,7 +307,7 @@ def execute_trade(symbol, signal, close_price, sentiment_score=50):
                 
                 send_discord_notification(
                     "🟢 New Trade Opened",
-                    f"**Symbol**: {symbol}\n**Type**: BUY\n**Entry Target**: ${close_price}\n**Take Profit**: ${limit_price}\n**Stop Loss**: ${stop_price}\n**Sentiment Score**: {sentiment_score}/100",
+                    f"**Symbol**: {symbol}\n**Type**: BUY\n**Entry Target**: ${close_price}\n**Take Profit**: ${limit_price}\n**Stop Loss**: ${stop_price}\n**Sentiment Score**: {sentiment_score}/100\n**Learning Constraint**: Required >{threshold_used} ({reason})",
                     color=0x3fb950
                 )
             
@@ -378,11 +436,12 @@ def run_bot_cycle():
                     print(f"{symbol} - Price: {current_price:.2f} - Signal: {signal}")
                     if signal != "HOLD":
                         sentiment = get_sentiment_score(symbol)
-                        print(f"{symbol} Sentiment: {sentiment}/100")
-                        if sentiment <= 25:
-                            print(f"TRADE BLOCKED: {symbol} market is in Extreme Fear (Score: {sentiment}).")
+                        req_threshold, reason = get_adaptive_threshold(symbol)
+                        print(f"{symbol} Sentiment: {sentiment}/100 (Required: >{req_threshold} due to {reason})")
+                        if sentiment <= req_threshold:
+                            print(f"TRADE BLOCKED: {symbol} market is below required sentiment threshold (Score: {sentiment} <= {req_threshold}).")
                         else:
-                            execute_trade(symbol, signal, current_price, sentiment)
+                            execute_trade(symbol, signal, current_price, sentiment, req_threshold, reason)
     
     # ── CRYPTO: Bulk fetch all crypto symbols ──
     crypto_bars = get_crypto_historical_data(CRYPTO_SYMBOLS)
@@ -396,11 +455,12 @@ def run_bot_cycle():
                     print(f"{symbol} - Price: {current_price:.2f} - Signal: {signal}")
                     if signal != "HOLD":
                         sentiment = get_sentiment_score(symbol)
-                        print(f"{symbol} Sentiment: {sentiment}/100")
-                        if sentiment <= 25:
-                            print(f"TRADE BLOCKED: {symbol} market is in Extreme Fear (Score: {sentiment}).")
+                        req_threshold, reason = get_adaptive_threshold(symbol)
+                        print(f"{symbol} Sentiment: {sentiment}/100 (Required: >{req_threshold} due to {reason})")
+                        if sentiment <= req_threshold:
+                            print(f"TRADE BLOCKED: {symbol} market is below required sentiment threshold (Score: {sentiment} <= {req_threshold}).")
                         else:
-                            execute_trade(symbol, signal, current_price, sentiment)
+                            execute_trade(symbol, signal, current_price, sentiment, req_threshold, reason)
 
     return {"status": "success", "message": "Cycle complete"}
 
